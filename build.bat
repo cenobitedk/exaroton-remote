@@ -4,7 +4,7 @@ pip install -r requirements.txt
 
 echo.
 echo Building ExarotonRemote.exe ...
-pyinstaller ^
+python -m PyInstaller ^
     --onefile ^
     --windowed ^
     --name "ExarotonRemote" ^

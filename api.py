@@ -40,14 +40,10 @@ class ExarotonAPI:
         return self._get(f"/servers/{server_id}/")
 
     def start(self, server_id: str):
-        r = self.session.get(f"{BASE}/servers/{server_id}/start/", timeout=10)
-        r.raise_for_status()
-        return r.json()
+        return self._get(f"/servers/{server_id}/start/")
 
     def stop(self, server_id: str):
-        r = self.session.get(f"{BASE}/servers/{server_id}/stop/", timeout=10)
-        r.raise_for_status()
-        return r.json()
+        return self._get(f"/servers/{server_id}/stop/")
 
     def status_label(self, status_code: int) -> str:
         return STATUS_LABELS.get(status_code, f"Unknown ({status_code})")

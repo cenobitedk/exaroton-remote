@@ -24,10 +24,13 @@ class ExarotonAPI:
 
     def _get(self, path: str):
         r = self.session.get(f"{BASE}{path}", timeout=10)
-        r.raise_for_status()
-        data = r.json()
+        try:
+            data = r.json()
+        except Exception:
+            r.raise_for_status()
+            raise
         if not data.get("success"):
-            raise RuntimeError(data.get("error", "Unknown API error"))
+            raise RuntimeError(data.get("error") or f"HTTP {r.status_code}")
         return data["data"]
 
     def account(self):

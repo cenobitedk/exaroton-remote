@@ -1,3 +1,4 @@
+from __future__ import annotations
 import sys
 import threading
 import tkinter as tk
@@ -111,7 +112,7 @@ class ServerCard(ctk.CTkFrame):
         self.info_label.configure(text="  •  ".join(parts))
 
         can_start = status_code == 0
-        can_stop = status_code == 1
+        can_stop = status_code in (1, 2, 4, 6, 10)  # Online, Starting, Restarting, Loading, Preparing
         if not self._busy:
             self.start_btn.configure(state="normal" if can_start else "disabled")
             self.stop_btn.configure(state="normal" if can_stop else "disabled")
@@ -140,6 +141,7 @@ class ServerCard(ctk.CTkFrame):
             self.after(0, lambda: messagebox.showerror("Error", str(e)))
             self.after(0, lambda: self._set_busy(False))
         else:
+            self.after(0, lambda: self._set_busy(False))
             self.after(500, self.on_action)
 
 
@@ -156,7 +158,7 @@ class App(ctk.CTk):
 
         self._build_ui()
         self._setup_tray()
-        # Intercept window close → hide to tray
+        # Hide to tray on close if tray is available, otherwise quit
         self.protocol("WM_DELETE_WINDOW", self._hide)
         self.after(100, self._init_api)
 
@@ -184,8 +186,11 @@ class App(ctk.CTk):
     # ------------------------------------------------------------------ Tray
 
     def _setup_tray(self):
-        icon_image = make_icon(64)
+        if sys.platform != "win32":
+            self._tray_icon = None
+            return
 
+        icon_image = make_icon(64)
         menu = pystray.Menu(
             pystray.MenuItem("Open", self._show, default=True),
             pystray.Menu.SEPARATOR,
@@ -197,8 +202,11 @@ class App(ctk.CTk):
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Quit", self._quit),
         )
-        self._tray_icon = pystray.Icon("ExarotonRemote", icon_image, "Exaroton Remote", menu)
-        self._tray_icon.run_detached()
+        try:
+            self._tray_icon = pystray.Icon("ExarotonRemote", icon_image, "Exaroton Remote", menu)
+            self._tray_icon.run_detached()
+        except Exception:
+            self._tray_icon = None
 
     def _show(self, *_):
         self.after(0, self._do_show)
@@ -209,7 +217,10 @@ class App(ctk.CTk):
         self.focus_force()
 
     def _hide(self):
-        self.withdraw()
+        if self._tray_icon:
+            self.withdraw()
+        else:
+            self._quit()
 
     def _toggle_startup(self, *_):
         startup.toggle()
@@ -292,8 +303,9 @@ def main():
         ctypes.windll.user32.ShowWindow(ctypes.windll.kernel32.GetConsoleWindow(), 0)
 
     app = App()
-    # Start hidden — tray icon is always present; double-click or "Open" to show
-    app.withdraw()
+    # Start hidden only if the tray is available; otherwise show the window immediately
+    if app._tray_icon:
+        app.withdraw()
     app.mainloop()
 
 

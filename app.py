@@ -7,6 +7,7 @@ import customtkinter as ctk
 import pystray
 
 import config as cfg
+import single_instance
 import startup
 from api import ExarotonAPI
 from icon import make_icon
@@ -53,18 +54,31 @@ class TokenDialog(ctk.CTkToplevel):
 
 
 class ServerCard(ctk.CTkFrame):
-    def __init__(self, parent, server_data: dict, api: ExarotonAPI, on_action):
+    def __init__(self, parent, server_data: dict, api: ExarotonAPI,
+                 on_action, is_favorite: bool, on_toggle_favorite):
         super().__init__(parent, corner_radius=10)
         self.server_id = server_data["id"]
         self.api = api
         self.on_action = on_action
+        self.on_toggle_favorite = on_toggle_favorite
         self._busy = False
 
         self.columnconfigure(1, weight=1)
 
+        # Name + star on the same row
         self.name_label = ctk.CTkLabel(self, text=server_data["name"],
                                         font=("Segoe UI", 15, "bold"), anchor="w")
-        self.name_label.grid(row=0, column=0, columnspan=4, padx=16, pady=(12, 2), sticky="w")
+        self.name_label.grid(row=0, column=0, columnspan=3, padx=16, pady=(12, 2), sticky="w")
+
+        self.star_btn = ctk.CTkButton(
+            self, text="★" if is_favorite else "☆",
+            width=32, height=28,
+            fg_color="transparent", hover_color="#333",
+            text_color="#f1c40f" if is_favorite else "#555",
+            font=("Segoe UI", 18),
+            command=self._toggle_fav,
+        )
+        self.star_btn.grid(row=0, column=3, padx=(0, 12), pady=(10, 0), sticky="e")
 
         addr = server_data.get("address") or ""
         self.addr_label = ctk.CTkLabel(self, text=addr, font=("Segoe UI", 11),
@@ -90,6 +104,15 @@ class ServerCard(ctk.CTkFrame):
         self.stop_btn.grid(row=2, column=3, padx=(0, 16), pady=(0, 12))
 
         self.update(server_data)
+
+    def set_favorite(self, is_fav: bool):
+        self.star_btn.configure(
+            text="★" if is_fav else "☆",
+            text_color="#f1c40f" if is_fav else "#555",
+        )
+
+    def _toggle_fav(self):
+        self.on_toggle_favorite(self.server_id)
 
     def update(self, server_data: dict):
         status_code = server_data.get("status", 0)
@@ -153,12 +176,13 @@ class App(ctk.CTk):
         self.minsize(460, 400)
         self.api: ExarotonAPI | None = None
         self.cards: dict[str, ServerCard] = {}
+        self.favorites: set[str] = cfg.load_favorites()
+        self._last_servers: list = []
         self._poll_job = None
         self._tray_icon: pystray.Icon | None = None
 
         self._build_ui()
         self._setup_tray()
-        # Hide to tray on close if tray is available, otherwise quit
         self.protocol("WM_DELETE_WINDOW", self._hide)
         self.after(100, self._init_api)
 
@@ -174,7 +198,11 @@ class App(ctk.CTk):
         ctk.CTkLabel(header, text="Exaroton Remote",
                      font=("Segoe UI", 18, "bold")).grid(row=0, column=0, padx=20, pady=12, sticky="w")
         self.credit_label = ctk.CTkLabel(header, text="", font=("Segoe UI", 12), text_color="#aaa")
-        self.credit_label.grid(row=0, column=1, padx=20, pady=12, sticky="e")
+        self.credit_label.grid(row=0, column=1, padx=(20, 8), pady=12, sticky="e")
+        self.refresh_btn = ctk.CTkButton(header, text="⟳", width=32, height=32,
+                                          fg_color="transparent", hover_color="#333",
+                                          font=("Segoe UI", 16), command=self._manual_refresh)
+        self.refresh_btn.grid(row=0, column=2, padx=(0, 12), pady=12)
 
         self.scroll = ctk.CTkScrollableFrame(self, corner_radius=0, fg_color="transparent")
         self.scroll.grid(row=1, column=0, sticky="nsew", padx=12, pady=12)
@@ -232,12 +260,40 @@ class App(ctk.CTk):
             self._tray_icon.stop()
         self.after(0, self.destroy)
 
+    def _manual_refresh(self):
+        self.refresh_btn.configure(state="disabled")
+        self._refresh()
+        self.after(2000, lambda: self.refresh_btn.configure(state="normal"))
+
+    # ------------------------------------------------------------------ Favorites
+
+    def _toggle_favorite(self, server_id: str):
+        if server_id in self.favorites:
+            self.favorites.discard(server_id)
+        else:
+            self.favorites.add(server_id)
+        cfg.save_favorites(self.favorites)
+        if server_id in self.cards:
+            self.cards[server_id].set_favorite(server_id in self.favorites)
+        self._reorder_cards()
+
+    def _sort_servers(self, servers: list) -> list:
+        return sorted(servers, key=lambda s: (
+            0 if s["id"] in self.favorites else 1,
+            s.get("name", "").lower(),
+        ))
+
+    def _reorder_cards(self):
+        for i, srv in enumerate(self._sort_servers(self._last_servers)):
+            sid = srv["id"]
+            if sid in self.cards:
+                self.cards[sid].grid(row=i, column=0, sticky="ew", pady=6, padx=4)
+
     # ------------------------------------------------------------------ API
 
     def _init_api(self):
         token = cfg.load_token()
         if not token:
-            self._do_show()
             token = self._prompt_token()
         if not token:
             self._quit()
@@ -271,6 +327,9 @@ class App(ctk.CTk):
         credits = account.get("credits", 0)
         self.credit_label.configure(text=f"{credits:.0f} credits")
 
+        self._last_servers = servers
+        sorted_servers = self._sort_servers(servers)
+
         existing_ids = set(self.cards.keys())
         new_ids = {s["id"] for s in servers}
 
@@ -279,12 +338,17 @@ class App(ctk.CTk):
             self.cards[sid].destroy()
             del self.cards[sid]
 
-        for i, srv in enumerate(servers):
+        for i, srv in enumerate(sorted_servers):
             sid = srv["id"]
             if sid in self.cards:
                 self.cards[sid].update(srv)
+                self.cards[sid].grid(row=i, column=0, sticky="ew", pady=6, padx=4)
             else:
-                card = ServerCard(self.scroll, srv, self.api, self._refresh)
+                card = ServerCard(
+                    self.scroll, srv, self.api, self._refresh,
+                    is_favorite=sid in self.favorites,
+                    on_toggle_favorite=self._toggle_favorite,
+                )
                 card.grid(row=i, column=0, sticky="ew", pady=6, padx=4)
                 self.cards[sid] = card
 
@@ -302,10 +366,15 @@ def main():
         import ctypes
         ctypes.windll.user32.ShowWindow(ctypes.windll.kernel32.GetConsoleWindow(), 0)
 
+    # Enforce single instance — if another is already running, bring it forward and exit
+    if not single_instance.claim():
+        sys.exit(0)
+
     app = App()
-    # Start hidden only if the tray is available; otherwise show the window immediately
-    if app._tray_icon:
-        app.withdraw()
+    # Register the show callback so the existing instance responds to new launch attempts
+    single_instance.start_listener(app._do_show)
+
+    # Always show the window on startup
     app.mainloop()
 
 
